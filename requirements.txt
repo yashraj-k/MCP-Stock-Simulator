@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlmodel
+numpy
+pandas
+httpx
+python-dotenv
+mcp
+fastmcp
+
