@@ -99,10 +99,14 @@ class PortfolioManager:
         if total_value == 0:
             return 0.0
         
-        position_weights = [
-            (pos.asset.current_price * pos.quantity) / total_value
-            for pos in portfolio.positions
-        ]
+        # Ensure all assets are loaded before accessing
+        position_weights = []
+        for pos in portfolio.positions:
+            if not hasattr(pos, 'asset') or pos.asset is None:
+                raise ValueError(f"Asset not loaded for position {pos.asset_symbol}")
+            position_weights.append(
+                (pos.asset.current_price * pos.quantity) / total_value
+            )
         
         # Calculate Herfindahl-Hirschman Index (HHI)
         # Lower HHI = more diversified
@@ -127,6 +131,8 @@ class PortfolioManager:
         sector_values = defaultdict(float)
         for pos in portfolio.positions:
             # Access asset via relationship (loaded from database)
+            if not hasattr(pos, 'asset') or pos.asset is None:
+                raise ValueError(f"Asset not loaded for position {pos.asset_symbol}")
             sector = pos.asset.sector or "Unknown"
             value = pos.asset.current_price * pos.quantity
             sector_values[sector] += value

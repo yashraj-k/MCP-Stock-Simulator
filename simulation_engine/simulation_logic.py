@@ -18,14 +18,36 @@ class SimulationEngine:
         if not portfolio:
             raise ValueError(f"Portfolio {request.portfolio_id} not found")
         
-        # Ensure positions and their assets are loaded
-        session.refresh(portfolio)
-        # Load assets for all positions
+        # Assets should already be loaded via eager loading in get_portfolio()
+        # But add safety check to ensure all assets are loaded
         for pos in portfolio.positions:
-            if not pos.asset:
+            if not hasattr(pos, 'asset') or pos.asset is None:
                 pos.asset = session.get(Asset, pos.asset_symbol)
+                if not pos.asset:
+                    raise ValueError(f"Asset {pos.asset_symbol} not found for position")
         
         initial_value = portfolio.total_value()
+        
+        # Handle empty portfolio case (only cash)
+        if not portfolio.positions:
+            # Portfolio has no positions, only cash - simulation just returns cash value
+            return SimulationResult(
+                portfolio_id=request.portfolio_id,
+                scenario=request.scenario,
+                initial_value=initial_value,
+                final_value=initial_value,  # Cash doesn't change in simulation
+                peak_value=initial_value,
+                drawdown=0.0,
+                daily_returns=[0.0] * (request.duration_days - 1) if request.duration_days > 1 else [],
+                daily_values=[initial_value] * request.duration_days,
+                risk_metrics={
+                    "sharpe_ratio": 0.0,
+                    "volatility": 0.0,
+                    "total_return": 0.0,
+                    "max_drawdown": 0.0
+                }
+            )
+        
         initial_prices = {
             pos.asset_symbol: pos.asset.current_price
             for pos in portfolio.positions
@@ -53,15 +75,20 @@ class SimulationEngine:
             current_value = portfolio.cash
             for pos in portfolio.positions:
                 symbol = pos.asset_symbol
+                if symbol not in price_series:
+                    raise ValueError(f"Price series not generated for asset {symbol}")
                 current_price = price_series[symbol][day]
                 current_value += current_price * pos.quantity
             
             daily_values.append(current_value)
             
             # Calculate daily return
-            if day > 0:
+            if day > 0 and daily_values[day - 1] > 0:
                 daily_return = (current_value - daily_values[day - 1]) / daily_values[day - 1]
                 daily_returns.append(daily_return)
+            elif day > 0:
+                # If previous value was zero, return is undefined (skip or use 0)
+                daily_returns.append(0.0)
             
             # Track peak
             if current_value > peak_value:
@@ -102,8 +129,13 @@ class SimulationEngine:
         if not portfolio:
             raise ValueError(f"Portfolio {portfolio_id} not found")
         
-        # Ensure positions are loaded
-        session.refresh(portfolio)
+        # Positions and assets should already be loaded via eager loading in get_portfolio()
+        # Add safety check to ensure all assets are loaded
+        for pos in portfolio.positions:
+            if not hasattr(pos, 'asset') or pos.asset is None:
+                pos.asset = session.get(Asset, pos.asset_symbol)
+                if not pos.asset:
+                    raise ValueError(f"Asset {pos.asset_symbol} not found for position")
         
         # Calculate metrics
         total_value = portfolio.total_value()

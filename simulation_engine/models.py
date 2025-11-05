@@ -52,10 +52,14 @@ class Portfolio(SQLModel, table=True):
         Calculate total portfolio value.
         Note: In database-backed version, positions are loaded via relationship.
         """
-        positions_value = sum(
-            pos.asset.current_price * pos.quantity 
-            for pos in self.positions
-        )
+        positions_value = 0.0
+        for pos in self.positions:
+            # Safety check: ensure asset is loaded
+            if not hasattr(pos, 'asset') or pos.asset is None:
+                # If asset not loaded, we can't calculate value - return cash only
+                # This should not happen with eager loading, but defensive programming
+                continue
+            positions_value += pos.asset.current_price * pos.quantity
         return self.cash + positions_value
 
 # Pydantic models for request/response (not stored in database)

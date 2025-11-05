@@ -1,0 +1,519 @@
+================================================================================
+AI-ASSISTED FINANCIAL TUTOR - PROJECT FLOW EXPLANATION
+================================================================================
+
+OVERVIEW
+--------
+This project is an educational financial simulation system that combines:
+1. A FastAPI-based simulation engine (backend API)
+2. A FastMCP server that bridges AI assistants (like Claude) to the simulation engine
+3. A SQLite database for persistent storage
+4. Monte Carlo simulation for market scenarios
+
+The system allows students to interact with an AI tutor through natural language
+to learn about finance by creating portfolios, executing trades, running simulations,
+and analyzing portfolio performance.
+
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+┌─────────────────┐
+│   AI Assistant  │  (Claude, ChatGPT, etc.)
+│  (User Client)  │
+└────────┬────────┘
+         │ JSON-RPC Protocol
+         │ (via MCP)
+         ▼
+┌─────────────────┐
+│  MCP Bridge     │  FastMCP Server
+│  (mcp_server.py)│  - Exposes tools to AI
+│                 │  - Handles JSON-RPC
+│                 │  - Manages AI prompts
+└────────┬────────┘
+         │ HTTP Requests
+         │ (httpx AsyncClient)
+         ▼
+┌─────────────────┐
+│ Simulation      │  FastAPI Application
+│ Engine          │  - REST API endpoints
+│ (main.py)       │  - Business logic
+│                 │  - Database operations
+└────────┬────────┘
+         │ SQL Queries
+         ▼
+┌─────────────────┐
+│  SQLite DB      │  Persistent Storage
+│  (simulator.db) │  - Portfolios
+│                 │  - Positions
+│                 │  - Assets
+└─────────────────┘
+
+
+================================================================================
+COMPONENT BREAKDOWN
+================================================================================
+
+1. SIMULATION ENGINE (simulation_engine/)
+   --------------------------------
+   Location: simulation_engine/
+   
+   Main Components:
+   - main.py: FastAPI application with REST endpoints
+   - models.py: Database models (Portfolio, PortfolioPosition, Asset, etc.)
+   - portfolio_manager.py: Portfolio CRUD operations and trade execution
+   - simulation_logic.py: Market simulation engine
+   - market_model.py: Monte Carlo price generation
+   
+   Key Responsibilities:
+   - Manage portfolios and positions
+   - Execute buy/sell trades
+   - Run market scenario simulations
+   - Analyze portfolio risk and diversification
+   - Store and retrieve data from SQLite database
+
+2. MCP BRIDGE (mcp_bridge/)
+   -------------------------
+   Location: mcp_bridge/
+   
+   Main Components:
+   - mcp_server.py: FastMCP server with tool definitions
+   - config.py: Configuration management
+   - prompts.py: AI tutor system prompts and examples
+   
+   Key Responsibilities:
+   - Bridge AI assistants to simulation engine via HTTP
+   - Provide natural language interface to simulation capabilities
+   - Format API responses for LLM consumption
+   - Handle errors and provide user-friendly messages
+
+3. DATABASE
+   ---------
+   - SQLite database (simulator.db)
+   - Uses SQLModel (combines SQLAlchemy + Pydantic)
+   - Tables: Portfolio, PortfolioPosition, Asset
+   - Relationships: Portfolio <-> PortfolioPosition <-> Asset
+
+
+================================================================================
+DATA MODELS
+================================================================================
+
+Portfolio
+---------
+- id: str (unique identifier)
+- name: str
+- cash: float (available cash)
+- created_at: datetime
+- positions: List[PortfolioPosition] (relationship)
+
+PortfolioPosition
+-----------------
+- id: int (primary key)
+- quantity: float (number of shares)
+- average_cost: float (average purchase price)
+- asset_symbol: str (foreign key to Asset)
+- portfolio_id: str (foreign key to Portfolio)
+- asset: Asset (relationship)
+- portfolio: Portfolio (relationship)
+
+Asset
+-----
+- symbol: str (primary key, e.g., "AAPL")
+- name: str (e.g., "Apple Inc.")
+- asset_type: str (stock, bond, etf)
+- sector: str (e.g., "Technology")
+- current_price: float
+- positions: List[PortfolioPosition] (relationship)
+
+
+================================================================================
+REQUEST FLOW EXAMPLES
+================================================================================
+
+EXAMPLE 1: User asks AI to "Buy 10 shares of AAPL"
+---------------------------------------------------
+
+1. User: "Please buy 10 shares of AAPL"
+   
+2. AI Assistant (Claude):
+   - Recognizes intent to execute trade
+   - Calls executeTrade tool via MCP
+   
+3. MCP Server (mcp_server.py):
+   - Receives: executeTrade(portfolio_id, symbol="AAPL", quantity=10, action="buy")
+   - Makes HTTP POST to: http://localhost:8000/trades
+   - Request body: {
+       "portfolio_id": "...",
+       "symbol": "AAPL",
+       "quantity": 10,
+       "action": "buy"
+     }
+   
+4. Simulation Engine (main.py):
+   - Endpoint: POST /trades
+   - Calls portfolio_manager.execute_trade()
+   
+5. Portfolio Manager (portfolio_manager.py):
+   - Retrieves portfolio from database (with eager loading of positions)
+   - Validates sufficient cash
+   - Finds existing position or creates new one
+   - Updates portfolio cash and position quantity
+   - Commits to database
+   - Reloads portfolio with positions (for serialization)
+   
+6. Response flows back:
+   - Portfolio Manager → FastAPI → MCP Server → AI → User
+   
+7. AI formats response:
+   "I've successfully bought 10 shares of AAPL. Your portfolio now has..."
+   [Shows updated portfolio state]
+
+
+EXAMPLE 2: User asks to "Run a crash scenario simulation"
+----------------------------------------------------------
+
+1. User: "What would happen to my portfolio in a market crash?"
+   
+2. AI Assistant:
+   - Calls runMarketScenario tool
+   
+3. MCP Server:
+   - Receives: runMarketScenario(portfolio_id, scenario="crash", duration_days=252)
+   - Makes HTTP POST to: http://localhost:8000/simulations/run
+   
+4. Simulation Engine:
+   - Endpoint: POST /simulations/run
+   - Calls simulation_engine.run_simulation()
+   
+5. Simulation Engine (simulation_logic.py):
+   - Gets portfolio with positions
+   - Gets initial portfolio value
+   - For each asset in portfolio:
+     - Calls market_model.generate_price_series()
+     - Applies scenario-specific parameters (crash = negative drift)
+     - Generates daily price series using Monte Carlo
+   
+6. Market Model (market_model.py):
+   - Uses geometric Brownian motion
+   - Applies scenario parameters (crash = high volatility, negative drift)
+   - Generates price series for specified days
+   
+7. Simulation Engine:
+   - Calculates portfolio value for each day
+   - Computes daily returns
+   - Calculates risk metrics (Sharpe ratio, volatility, drawdown)
+   - Returns SimulationResult
+   
+8. Response flows back:
+   - SimulationResult → FastAPI → MCP Server → AI → User
+   
+9. AI formats response:
+   "In a market crash scenario over 1 year, your portfolio would..."
+   [Shows initial value, final value, peak, drawdown, risk metrics]
+
+
+EXAMPLE 3: User asks "Analyze my portfolio"
+---------------------------------------------
+
+1. User: "Analyze my portfolio risk"
+   
+2. AI Assistant:
+   - Calls analyzePortfolioRisk tool
+   
+3. MCP Server:
+   - Makes HTTP GET to: http://localhost:8000/portfolios/{id}/analysis
+   
+4. Simulation Engine:
+   - Endpoint: GET /portfolios/{portfolio_id}/analysis
+   - Calls simulation_engine.analyze_portfolio()
+   
+5. Portfolio Manager:
+   - Calculates diversification score (Herfindahl-Hirschman Index)
+   - Calculates sector exposure percentages
+   - Determines risk level (low/medium/high)
+   - Calculates volatility
+   
+6. Response includes:
+   - Total value, cash, invested value
+   - Diversification score (0-1)
+   - Sector exposure breakdown
+   - Risk level
+   - Recommendations
+   
+7. AI formats response:
+   "Your portfolio analysis shows..."
+   [Explains diversification, risk, provides recommendations]
+
+
+================================================================================
+KEY PROCESSES
+================================================================================
+
+TRADE EXECUTION PROCESS
+-----------------------
+1. Validate portfolio exists
+2. Validate asset exists
+3. Load portfolio with positions (eager loading)
+4. For BUY:
+   - Check sufficient cash
+   - Find existing position or create new
+   - Update position quantity and average cost
+   - Deduct cash from portfolio
+5. For SELL:
+   - Check sufficient shares
+   - Calculate proceeds
+   - Reduce position quantity
+   - Add cash to portfolio
+   - Remove position if quantity reaches zero
+6. Commit to database
+7. Reload portfolio with positions for response
+8. Return updated portfolio
+
+SIMULATION PROCESS
+------------------
+1. Load portfolio with positions and assets
+2. Get initial portfolio value
+3. For each asset in portfolio:
+   - Generate price series using Monte Carlo
+   - Apply scenario-specific parameters
+   - Apply market impact (if scenario requires)
+4. For each day:
+   - Calculate current portfolio value
+   - Track daily returns
+   - Track peak value
+5. Calculate risk metrics:
+   - Volatility (annualized)
+   - Sharpe ratio
+   - Total return
+   - Maximum drawdown
+6. Return SimulationResult
+
+PORTFOLIO ANALYSIS PROCESS
+---------------------------
+1. Load portfolio with positions and assets
+2. Calculate total portfolio value
+3. Calculate diversification score:
+   - Get position weights (value / total value)
+   - Calculate HHI (sum of squared weights)
+   - Convert to diversification score (0-1)
+4. Calculate sector exposure:
+   - Group positions by asset sector
+   - Calculate percentage of total value per sector
+5. Determine risk level:
+   - Based on volatility and concentration
+6. Generate recommendations
+7. Return PortfolioAnalysis
+
+
+================================================================================
+DATABASE RELATIONSHIPS & EAGER LOADING
+================================================================================
+
+Critical Implementation Detail:
+- SQLModel uses lazy loading by default for relationships
+- When serializing Portfolio to JSON, positions must be eagerly loaded
+- Solution: Use selectinload() to load positions and assets together
+
+Example:
+  statement = select(Portfolio).where(Portfolio.id == portfolio_id).options(
+      selectinload(Portfolio.positions).selectinload(PortfolioPosition.asset)
+  )
+
+This ensures:
+- Positions are included in JSON response
+- Asset data for each position is included
+- No KeyError when accessing portfolio["positions"]
+
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+Portfolio Management:
+- POST /portfolios - Create new portfolio
+- GET /portfolios/{id} - Get portfolio details
+- GET /portfolios - List all portfolios
+
+Trading:
+- POST /trades - Execute buy/sell trade
+
+Simulation:
+- POST /simulations/run - Run market scenario simulation
+- POST /simulations/compare - Compare two portfolios
+
+Analysis:
+- GET /portfolios/{id}/analysis - Analyze portfolio risk
+
+Assets:
+- GET /assets - List available assets
+- GET /assets/{symbol} - Get asset details
+
+
+================================================================================
+MCP TOOLS EXPOSED TO AI
+================================================================================
+
+1. createPortfolio(name, initial_cash)
+   - Creates a new portfolio for the student
+
+2. executeTrade(portfolio_id, symbol, quantity, action)
+   - Executes buy/sell orders
+
+3. getPortfolioInfo(portfolio_id)
+   - Retrieves current portfolio state
+
+4. listAvailableAssets()
+   - Lists all tradeable assets
+
+5. runMarketScenario(portfolio_id, scenario, duration_days)
+   - Runs market simulation (crash, boom, bear, etc.)
+
+6. analyzePortfolioRisk(portfolio_id)
+   - Analyzes risk, diversification, sector exposure
+
+7. comparePortfolios(portfolio_1_id, portfolio_2_id, scenario, duration_days)
+   - Compares two portfolios side-by-side
+
+
+================================================================================
+MARKET SCENARIOS
+================================================================================
+
+Available scenarios:
+- crash: Major market crash (like 2008)
+- boom: Bull market with strong growth
+- bear: Bear market with gradual decline
+- sector_boom: Sector bubble (like tech bubble)
+- interest_rate_hike: Market reaction to rising rates
+- panic_sell: Panic-selling cascade
+
+Each scenario modifies:
+- Drift (trend direction)
+- Volatility multiplier
+- Market impact effects
+
+
+================================================================================
+CONFIGURATION
+================================================================================
+
+MCP Bridge Configuration (mcp_bridge/config.py):
+- MCP_SIMULATION_API_URL: URL of FastAPI server (default: http://localhost:8000)
+- MCP_API_TIMEOUT: Request timeout in seconds (default: 30)
+
+Loaded from .env file with MCP_ prefix.
+
+
+================================================================================
+STARTUP SEQUENCE
+================================================================================
+
+1. Simulation Engine starts:
+   - Creates database tables if they don't exist
+   - Populates sample assets (AAPL, GOOGL, MSFT, JPM, VTI)
+   - Starts FastAPI server on port 8000
+
+2. MCP Bridge starts:
+   - Loads configuration
+   - Creates FastMCP server
+   - Creates HTTP client for API calls
+   - Exposes tools to AI assistants
+   - Sets system prompts for AI tutor
+
+3. AI Assistant connects:
+   - Establishes JSON-RPC connection
+   - Discovers available tools
+   - Ready to accept user queries
+
+
+================================================================================
+ERROR HANDLING
+================================================================================
+
+1. MCP Server:
+   - Catches HTTP errors from API
+   - Formats error messages for AI
+   - Returns success: false with error details
+
+2. Simulation Engine:
+   - Validates portfolio exists (404 if not found)
+   - Validates asset exists (404 if not found)
+   - Validates sufficient cash/shares (400 Bad Request)
+   - Returns proper HTTP status codes
+
+3. Database:
+   - Uses transactions for data integrity
+   - Eager loading prevents missing relationship errors
+   - Defensive checks for missing positions field
+
+
+================================================================================
+KEY TECHNICAL DETAILS
+================================================================================
+
+1. Eager Loading:
+   - Positions must be eagerly loaded when retrieving portfolios
+   - Uses SQLAlchemy's selectinload() for efficient loading
+   - Ensures positions are included in JSON serialization
+
+2. Monte Carlo Simulation:
+   - Uses geometric Brownian motion
+   - Applies scenario-specific drift and volatility
+   - Generates realistic price series
+
+3. Diversification Scoring:
+   - Uses Herfindahl-Hirschman Index (HHI)
+   - Lower HHI = more diversified
+   - Converts to 0-1 score for easy interpretation
+
+4. JSON-RPC Protocol:
+   - MCP uses JSON-RPC 2.0
+   - All stdout must be JSON-RPC messages only
+   - Errors go to stderr, not stdout
+
+5. Async Operations:
+   - MCP server uses async/await for HTTP calls
+   - FastAPI endpoints are async-compatible
+   - httpx.AsyncClient for non-blocking requests
+
+
+================================================================================
+TESTING THE SYSTEM
+================================================================================
+
+1. Start Simulation Engine:
+   cd simulation_engine
+   uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+2. Start MCP Bridge:
+   cd mcp_bridge
+   fastmcp dev mcp_server.py
+
+3. Connect AI Assistant:
+   - Configure Claude/ChatGPT to use MCP server
+   - Test with: "Create a portfolio", "Buy 10 AAPL", etc.
+
+4. Test API directly:
+   - Visit http://localhost:8000/docs for Swagger UI
+   - Test endpoints manually
+
+
+================================================================================
+FUTURE ENHANCEMENTS
+================================================================================
+
+From IMPLEMENTATION_PLAN.md:
+- Frontend web application
+- User authentication
+- Historical data integration
+- Advanced market models (ABM, covariance matrices)
+- Real-time price updates
+- User study and research paper
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
